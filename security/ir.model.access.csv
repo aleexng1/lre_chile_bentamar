@@ -1,0 +1,8 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_lre_economic_indicator,lre.economic.indicator,model_lre_economic_indicator,base.group_user,1,1,1,1
+access_lre_iu_table_period,lre.iu_table_period,model_lre_iu_table_period,base.group_user,1,1,1,1
+access_lre_iu_bracket_period,lre.iu_bracket_period,model_lre_iu_bracket_period,base.group_user,1,1,1,1
+access_lre_export_wizard,lre.export.wizard,model_lre_export_wizard,base.group_user,1,1,1,1
+access_lre_afp_parameter,lre.afp.parameter,model_lre_afp_parameter,base.group_user,1,1,1,1
+access_lre_family_bracket,lre.family.bracket,model_lre_family_bracket,base.group_user,1,1,1,1
+access_previred_export_wizard,previred.export.wizard,model_previred_export_wizard,base.group_user,1,1,1,1

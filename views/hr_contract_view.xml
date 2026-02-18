@@ -1,0 +1,29 @@
+<odoo>
+    <data>
+        <record id="view_hr_contract_form_lre" model="ir.ui.view">
+            <field name="name">hr.contract.form.lre</field>
+            <field name="model">hr.contract</field>
+            <field name="inherit_id" ref="hr_contract.hr_contract_view_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='date_end']" position="after">
+                    <field name="lre_termination_cause" invisible="state != 'cancel'" required="state == 'cancel'"/>
+                </xpath>
+                <xpath expr="//notebook" position="inside">
+                    <page string="Información Previsional (Chile)" name="lre_chile_prevision">
+                        <group>
+                            <group string="AFP y Previsión">
+                                <field name="lre_afp_code"/>
+                            </group>
+                            <group string="Salud">
+                                <field name="lre_health_system_code"/>
+                                <field name="lre_isapre_institution" invisible="lre_health_system_code != 'isapre'"/>
+                                <field name="lre_health_amount_type" invisible="lre_health_system_code != 'isapre'"/>
+                                <field name="lre_health_amount" invisible="lre_health_system_code != 'isapre'"/>
+                            </group>
+                        </group>
+                    </page>
+                </xpath>
+            </field>
+        </record>
+    </data>
+</odoo>

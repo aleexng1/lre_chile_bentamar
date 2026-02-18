@@ -1,0 +1,17 @@
+<odoo>
+  <!-- Menú raíz bajo Nómina -->
+  <menuitem id="menu_lre_root" name="LRE Chile"
+            parent="om_hr_payroll.menu_hr_payroll_root" sequence="90"/>
+
+  <!-- Acción que abre el wizard en modal -->
+  <record id="action_lre_export_wizard" model="ir.actions.act_window">
+    <field name="name">Exportar LRE (DT)</field>
+    <field name="res_model">lre.export.wizard</field>
+    <field name="view_mode">form</field>
+    <field name="target">new</field>
+  </record>
+
+  <!-- Opción de menú -->
+  <menuitem id="menu_lre_export" name="Exportar LRE (DT)"
+            parent="menu_lre_root" action="action_lre_export_wizard" sequence="10"/>
+</odoo>

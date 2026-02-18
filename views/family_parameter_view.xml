@@ -1,0 +1,31 @@
+<odoo>
+    <data>
+        <!-- Tree View (Editable) -->
+        <record id="view_lre_family_bracket_tree" model="ir.ui.view">
+            <field name="name">lre.family.bracket.tree</field>
+            <field name="model">lre.family.bracket</field>
+            <field name="arch" type="xml">
+                <list string="Tramos Asignación Familiar" editable="top">
+                    <field name="name"/>
+                    <field name="min_income"/>
+                    <field name="max_income"/>
+                    <field name="amount"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- Action -->
+        <record id="action_lre_family_bracket" model="ir.actions.act_window">
+            <field name="name">Tramos Asignación Familiar</field>
+            <field name="res_model">lre.family.bracket</field>
+            <field name="view_mode">list</field>
+        </record>
+
+        <!-- Menu -->
+        <menuitem id="menu_lre_family_bracket"
+                  name="Tramos Asignación Familiar"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_family_bracket"
+                  sequence="70"/>
+    </data>
+</odoo>

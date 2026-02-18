@@ -1,0 +1,31 @@
+<odoo>
+    <data>
+        <!-- Tree View (Editable) -->
+        <record id="view_lre_afp_parameter_tree" model="ir.ui.view">
+            <field name="name">lre.afp.parameter.tree</field>
+            <field name="model">lre.afp.parameter</field>
+            <field name="arch" type="xml">
+                <list string="Tasas AFP" editable="top">
+                    <field name="name"/>
+                    <field name="code"/>
+                    <field name="rate_employee"/>
+                    <field name="rate_sis"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- Action -->
+        <record id="action_lre_afp_parameter" model="ir.actions.act_window">
+            <field name="name">Tasas AFP</field>
+            <field name="res_model">lre.afp.parameter</field>
+            <field name="view_mode">list</field>
+        </record>
+
+        <!-- Menu -->
+        <menuitem id="menu_lre_afp_parameter"
+                  name="Tasas AFP"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_afp_parameter"
+                  sequence="60"/>
+    </data>
+</odoo>

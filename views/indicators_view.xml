@@ -1,0 +1,101 @@
+<odoo>
+    <data>
+        <!-- Menu Parent -->
+        <menuitem id="menu_l10n_cl_config"
+                  name="Parámetros Chile"
+                  parent="om_hr_payroll.menu_hr_payroll_configuration"
+                  sequence="50"/>
+
+        <!-- Tree View (Editable List) -->
+        <record id="view_lre_economic_indicator_tree" model="ir.ui.view">
+            <field name="name">lre.economic.indicator.tree</field>
+            <field name="model">lre.economic.indicator</field>
+            <field name="arch" type="xml">
+                <list string="Indicadores" editable="top" default_order="date desc">
+                    <field name="date"/>
+                    <field name="indicator_type" column_invisible="True"/>
+                    <field name="amount"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- Form View (Minimalist) -->
+        <record id="view_lre_economic_indicator_form" model="ir.ui.view">
+            <field name="name">lre.economic.indicator.form</field>
+            <field name="model">lre.economic.indicator</field>
+            <field name="arch" type="xml">
+                <form string="Economic Indicator">
+                    <sheet>
+                        <group>
+                            <group>
+                                <field name="indicator_type" invisible="1"/>
+                                <field name="date"/>
+                            </group>
+                            <group>
+                                <field name="amount"/>
+                            </group>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- Actions -->
+        <record id="action_lre_indicator_uf" model="ir.actions.act_window">
+            <field name="name">Valores UF</field>
+            <field name="res_model">lre.economic.indicator</field>
+            <field name="view_mode">list,form</field>
+            <field name="domain">[('indicator_type', '=', 'uf')]</field>
+            <field name="context">{'default_indicator_type': 'uf'}</field>
+        </record>
+
+        <record id="action_lre_indicator_utm" model="ir.actions.act_window">
+            <field name="name">Valores UTM</field>
+            <field name="res_model">lre.economic.indicator</field>
+            <field name="view_mode">list,form</field>
+            <field name="domain">[('indicator_type', '=', 'utm')]</field>
+            <field name="context">{'default_indicator_type': 'utm'}</field>
+        </record>
+
+        <record id="action_lre_indicator_uta" model="ir.actions.act_window">
+            <field name="name">Valores UTA</field>
+            <field name="res_model">lre.economic.indicator</field>
+            <field name="view_mode">list,form</field>
+            <field name="domain">[('indicator_type', '=', 'uta')]</field>
+            <field name="context">{'default_indicator_type': 'uta'}</field>
+        </record>
+
+        <record id="action_lre_indicator_imm" model="ir.actions.act_window">
+            <field name="name">Ingreso Mínimo</field>
+            <field name="res_model">lre.economic.indicator</field>
+            <field name="view_mode">list,form</field>
+            <field name="domain">[('indicator_type', '=', 'imm')]</field>
+            <field name="context">{'default_indicator_type': 'imm'}</field>
+        </record>
+
+        <!-- Menus -->
+        <menuitem id="menu_lre_indicator_uf"
+                  name="Valores UF"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_indicator_uf"
+                  sequence="10"/>
+
+        <menuitem id="menu_lre_indicator_utm"
+                  name="Valores UTM"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_indicator_utm"
+                  sequence="20"/>
+
+        <menuitem id="menu_lre_indicator_uta"
+                  name="Valores UTA"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_indicator_uta"
+                  sequence="30"/>
+
+        <menuitem id="menu_lre_indicator_imm"
+                  name="Ingreso Mínimo"
+                  parent="menu_l10n_cl_config"
+                  action="action_lre_indicator_imm"
+                  sequence="40"/>
+    </data>
+</odoo>

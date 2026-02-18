@@ -1,0 +1,35 @@
+<odoo>
+  <record id="view_previred_export_wizard_form" model="ir.ui.view">
+    <field name="name">previred.export.wizard.form</field>
+    <field name="model">previred.export.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Exportar Previred (105 Columnas)">
+        <group>
+          <field name="company_id" invisible="1"/>
+          <group>
+            <field name="year"/>
+            <field name="month"/>
+            <field name="output_format" widget="radio"/>
+          </group>
+        </group>
+        <footer>
+          <button string="Generar Archivo Previred" type="object" name="action_generate_previred" class="btn-primary"/>
+          <button string="Cancelar" class="btn-secondary" special="cancel"/>
+        </footer>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_previred_export_wizard" model="ir.actions.act_window">
+    <field name="name">Exportar Previred</field>
+    <field name="res_model">previred.export.wizard</field>
+    <field name="view_mode">form</field>
+    <field name="target">new</field>
+  </record>
+
+  <menuitem id="menu_previred_export"
+            name="Exportar Previred"
+            parent="menu_lre_root"
+            action="action_previred_export_wizard"
+            sequence="20"/>
+</odoo>
