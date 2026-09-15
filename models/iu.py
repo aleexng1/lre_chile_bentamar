@@ -32,10 +32,12 @@ class LREIUTablePeriod(models.Model):
 
     # helper para futuros cálculos
     def compute_tax_amount(self, imponible_amount):
-        """Impuesto = imponible * factor - rebaja"""
+        """Impuesto = imponible * factor - rebaja.
+        Retorna int (pesos chilenos, truncado al peso inferior — SII Circular N° 37).
+        """
         self.ensure_one()
         if imponible_amount <= 0:
-            return 0.0
+            return 0
         lines = self.line_ids.sorted(lambda l: (l.base_from_amount, l.sequence))
         for ln in lines:
             if ln.base_to_amount and imponible_amount > ln.base_to_amount:
@@ -43,8 +45,9 @@ class LREIUTablePeriod(models.Model):
             if imponible_amount >= ln.base_from_amount and (not ln.base_to_amount or imponible_amount <= ln.base_to_amount):
                 # usar factor (proporción). Si no está, caer a rate_percent/100 para retrocompatibilidad
                 factor = (ln.factor if ln.factor else (ln.rate_percent or 0.0) / 100.0)
-                return max(0.0, (imponible_amount * factor) - (ln.rebate_amount or 0.0))
-        return 0.0
+                raw = (imponible_amount * factor) - (ln.rebate_amount or 0.0)
+                return max(0, int(raw))  # truncado al peso inferior (SII)
+        return 0
 
 
 class LREIUBracketPeriod(models.Model):
