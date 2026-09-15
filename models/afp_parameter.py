@@ -1,4 +1,5 @@
 from odoo import models, fields, api
+from odoo.tools import ormcache
 
 class LreAfpParameter(models.Model):
     _name = 'lre.afp.parameter'
@@ -22,12 +23,29 @@ class LreAfpParameter(models.Model):
     _sql_constraints = [
         ('unique_code', 'unique(code)', 'El código de AFP debe ser único.')
     ]
-    
+
+    def write(self, vals):
+        res = super().write(vals)
+        self.env.registry.clear_cache()
+        return res
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        res = super().create(vals_list)
+        self.env.registry.clear_cache()
+        return res
+
+    def unlink(self):
+        res = super().unlink()
+        self.env.registry.clear_cache()
+        return res
+
     @api.model
+    @ormcache('afp_code')
     def get_rates(self, afp_code):
         """
-        Retorna las tasas de la AFP dado su código.
-        Maneja conversión a minúsculas para robustez.
+        Retorna las tasas cacheadas de la AFP dado su código.
+        Cache se invalida al crear/escribir/eliminar parámetros AFP.
         :param afp_code: Código de la AFP (str o similar)
         :return: dict {'employee': float, 'sis': float}
         """
