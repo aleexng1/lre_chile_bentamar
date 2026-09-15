@@ -3,6 +3,7 @@ import base64
 import calendar
 import csv
 import io
+import logging
 from datetime import date
 
 from odoo import models, fields, api, _
@@ -13,6 +14,8 @@ from ..models.lre_dt_tables import (
     REGION_CODES,
     normalize_name,
 )
+
+_logger = logging.getLogger(__name__)
 
 class LreExportWizard(models.TransientModel):
     _name = 'lre.export.wizard'
@@ -128,6 +131,37 @@ class LreExportWizard(models.TransientModel):
             if code := COMUNA_CODES.get(normalize_name(candidate)):
                 return code
         return None
+
+    def _get_workday_code(self, contract) -> str:
+        """Resuelve el cód 1107 desde el contrato.
+
+        Si el contrato no tiene jornada declarada se infiere desde el
+        calendario de trabajo (menos de 30 horas semanales = jornada parcial
+        del Art. 40 bis). Cualquier fallo al leer el calendario degrada a
+        jornada ordinaria en vez de dejar el campo nulo, que es lo que hoy
+        rechaza la DT.
+        """
+        if code := contract.lre_workday_type:
+            return code
+
+        try:
+            calendar_id = contract.resource_calendar_id
+            hours = float(getattr(calendar_id, 'hours_per_week', 0.0) or 0.0)
+        except (AttributeError, TypeError, ValueError) as exc:
+            _logger.warning(
+                "LRE 1107: no fue posible leer la jornada del contrato %s (%s); "
+                "se exporta 101 - Ordinaria. Detalle: %s",
+                contract.display_name, contract.id, exc,
+            )
+            return '101'
+
+        match hours:
+            case 0.0:
+                return '101'
+            case h if h < 30.0:
+                return '201'
+            case _:
+                return '101'
 
     def _get_afc_code(self, contract, row_data) -> str:
         """Resuelve el cód 1151: 1 = afiliado a la AFC, 0 = no afiliado.
@@ -261,6 +295,9 @@ class LreExportWizard(models.TransientModel):
                     "(cód 1105)."
                 ) % {'employee': employee.display_name})
             row_data['1105'] = region_code or ''
+
+            # --- 1107: TIPO DE JORNADA ---
+            row_data['1107'] = self._get_workday_code(contract)
 
             # 1170 Tipo Impuesto
             row_data['1170'] = '1' # Impuesto Único

@@ -1,5 +1,10 @@
 from odoo import models, fields
 
+from .lre_dt_tables import (
+    WORKDAY_TYPE_CODES,
+)
+
+
 class HrContract(models.Model):
     _inherit = 'hr.contract'
 
@@ -61,6 +66,13 @@ class HrContract(models.Model):
              "Completar solo si la comuna no puede resolverse automáticamente "
              "desde la ficha de dirección (p. ej. cuando la dirección registra "
              "una localidad como 'Pargua' en lugar de la comuna 'Calbuco').")
+
+    lre_workday_type = fields.Selection(
+        WORKDAY_TYPE_CODES,
+        string="Tipo de jornada (1107)",
+        default='101',
+        help="Código oficial DT del tipo de jornada pactada en el contrato o "
+             "en un anexo posterior.")
 
     lre_afc_affiliated = fields.Selection([
         ('auto', 'Determinar según cotizaciones del período'),
