@@ -17,7 +17,7 @@
     'website': "http://www.bentamar.cl",
 
     'category': 'Human Resources/Payroll',
-    'version': '18.0.1.0.0',
+    'version': '18.0.1.1.0',
 
     'depends': ['base', 'hr', 'hr_contract', 'om_hr_payroll'],
 
