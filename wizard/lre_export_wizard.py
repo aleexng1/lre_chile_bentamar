@@ -4,6 +4,7 @@ import calendar
 import csv
 import io
 import logging
+import re
 from datetime import date
 
 from odoo import models, fields, api, _
@@ -97,9 +98,35 @@ class LreExportWizard(models.TransientModel):
     )
 
     def _clean_rut(self, rut):
+        """Limpia y valida RUT: retorna '12345678-K' o '' si el digito
+        verificador no calza (algoritmo modulo 11)."""
         if not rut:
             return ''
-        return rut.replace('.', '').replace('-', '').strip().upper()
+        rut_clean = re.sub(r'[^0-9kK]', '', str(rut)).upper()
+        if len(rut_clean) < 2:
+            return ''
+        cuerpo = rut_clean[:-1]
+        dv = rut_clean[-1]
+        if not cuerpo.isdigit():
+            return ''
+        if not self._validate_rut_dv(cuerpo, dv):
+            return ''
+        return f"{cuerpo}-{dv}"
+
+    @staticmethod
+    def _validate_rut_dv(cuerpo, dv):
+        """Valida el digito verificador con el algoritmo modulo 11 chileno."""
+        reversed_digits = map(int, reversed(cuerpo))
+        factors = [2, 3, 4, 5, 6, 7]
+        s = sum(d * factors[i % 6] for i, d in enumerate(reversed_digits))
+        remainder = 11 - (s % 11)
+        if remainder == 11:
+            expected = '0'
+        elif remainder == 10:
+            expected = 'K'
+        else:
+            expected = str(remainder)
+        return dv == expected
 
     # ------------------------------------------------------------------
     # Helpers de normalización
@@ -292,12 +319,14 @@ class LreExportWizard(models.TransientModel):
 
             # Paso B: Datos Fijos (Serie 1xxx)
             # 1101 RUT: Formato 12345678-K (Sin puntos, con guión)
-            rut_raw = employee.identification_id or ''
-            rut_clean = rut_raw.replace('.', '').replace(',', '').replace('-', '').strip().upper()
-            if len(rut_clean) > 1:
-                rut_formatted = f"{rut_clean[:-1]}-{rut_clean[-1]}"
-            else:
-                rut_formatted = rut_clean
+            # Se revalida el digito verificador (modulo 11) antes de exportar:
+            # un RUT mal tipeado no debe pasar en silencio.
+            rut_formatted = self._clean_rut(employee.identification_id)
+            if not rut_formatted:
+                validation_errors.append(_(
+                    "%(employee)s: el RUT '%(rut)s' no es valido (digito "
+                    "verificador incorrecto) o esta vacio."
+                ) % {'employee': employee.display_name, 'rut': employee.identification_id or ''})
             row_data['1101'] = rut_formatted
             
             # 1102 Fecha Inicio
