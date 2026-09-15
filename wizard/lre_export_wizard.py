@@ -10,7 +10,9 @@ from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 
 from ..models.lre_dt_tables import (
+    AFP_CODES,
     COMUNA_CODES,
+    HEALTH_CODES,
     REGION_CODES,
     normalize_name,
 )
@@ -93,20 +95,6 @@ class LreExportWizard(models.TransientModel):
         ('13', '15'),    # Putre / General Lagos -> Arica y Parinacota
         ('151', '15'),   # Arica
     )
-
-    # Mapeos
-    AFP_CODES = {
-        'capital': '33', 'cuprum': '03', 'habitat': '05', 
-        'planvital': '29', 'provida': '23', 'modelo': '34', 
-        'uno': '35', 'ips': '08'
-    }
-
-    ISAPRE_CODES = {
-        'banmedica': '01', 'colmena': '04', 'consalud': '09', 
-        'cruzblanca': '06', 'nuevamasvida': '43', 'vidatres': '12', 
-        'esencial': '44', 'fundacion': '40', 'rio_blanco': '41', 
-        'chuquicamata': '37'
-    }
 
     def _clean_rut(self, rut):
         if not rut:
@@ -224,6 +212,27 @@ class LreExportWizard(models.TransientModel):
                 contributed = (row_data.get('3151') or 0) > 0 or (row_data.get('4151') or 0) > 0
                 return '1' if contributed else '0'
 
+    def _get_health_code(self, contract) -> str:
+        """Resuelve el cód 1143 (FONASA = 102, isapres con su código DT).
+
+        La columna es obligatoria, así que nunca se devuelve vacío: un contrato
+        marcado como isapre pero sin institución informada degrada a FONASA y
+        deja traza en el log, en vez de generar un archivo que la DT rechaza.
+        """
+        match contract.lre_health_system_code:
+            case 'isapre':
+                if code := HEALTH_CODES.get(contract.lre_isapre_institution):
+                    return code
+                _logger.warning(
+                    "LRE 1143: el contrato %s (%s) declara isapre pero no tiene "
+                    "institución informada; se exporta 102 - FONASA.",
+                    contract.display_name, contract.id,
+                )
+                return HEALTH_CODES['fonasa']
+            case _:
+                # fonasa, capredena/dipreca o sin sistema declarado
+                return HEALTH_CODES['fonasa']
+
     def _format_cell(self, col_code: str, value) -> str:
         """Aplica la política de relleno de la DT a una celda.
 
@@ -305,13 +314,17 @@ class LreExportWizard(models.TransientModel):
                 if date_start <= contract.date_end <= date_end:
                     term_date = contract.date_end.strftime('%d/%m/%Y')
                     
-                    # Lógica de Causal
-                    if contract.state == 'close': # Vencido
-                        term_cause = '3' # Vencimiento del plazo
-                    elif contract.state == 'cancel': # Cancelado
+                    # Lógica de Causal (cód 1104, tabla oficial DT)
+                    if contract.state == 'close':
+                        # Vencido: la causal por defecto es el vencimiento del
+                        # plazo convenido (6 en la tabla DT, no 3, que es el
+                        # mutuo acuerdo), pero si el usuario declaró otra en el
+                        # contrato ésa manda.
+                        term_cause = contract.lre_termination_cause or '6'
+                    elif contract.state == 'cancel':
                         term_cause = contract.lre_termination_cause or ''
                     else:
-                        term_cause = '' # Otro estado (open, draft) no debería tener fecha fin en periodo activo, pero por si acaso.
+                        term_cause = ''  # open/draft: no debería tener fecha fin en el período.
             
             row_data['1103'] = term_date
             row_data['1104'] = term_cause
@@ -376,22 +389,14 @@ class LreExportWizard(models.TransientModel):
             # 1146 Tecnico Extranjero
             row_data['1146'] = '0'
 
-            # 1141 AFP
-            afp_code_internal = contract.lre_afp_code
-            row_data['1141'] = self.AFP_CODES.get(afp_code_internal, '00')
+            # 1141 AFP (códigos DT, no Previred)
+            row_data['1141'] = AFP_CODES.get(contract.lre_afp_code, AFP_CODES['sin_afp'])
 
             # 1142 IPS (ExINP): 0 = no pertenece al antiguo régimen
             row_data['1142'] = self._as_code(contract.lre_ips_code)
 
             # 1143 Salud
-            health_system = contract.lre_health_system_code
-            if health_system == 'fonasa':
-                row_data['1143'] = '07'
-            elif health_system == 'isapre':
-                isapre_internal = contract.lre_isapre_institution
-                row_data['1143'] = self.ISAPRE_CODES.get(isapre_internal, '')
-            else:
-                row_data['1143'] = '00'
+            row_data['1143'] = self._get_health_code(contract)
 
             # 1151 AFC: 0 / 1, nunca el literal '53'
             row_data['1151'] = self._get_afc_code(contract, row_data)
@@ -399,9 +404,8 @@ class LreExportWizard(models.TransientModel):
             # 1110 CCAF: atributo de la empresa, no del trabajador
             row_data['1110'] = self._as_code(contract.company_id.lre_ccaf_code)
 
-            # 1152 Mutual
-            # Usar configuración de compañía
-            row_data['1152'] = contract.company_id.lre_mutual_code or '102'
+            # 1152 Mutual (códigos DT 0/1/2/3)
+            row_data['1152'] = self._as_code(contract.company_id.lre_mutual_code)
 
             # 1118 / 1155 / 1157 / 1131: declarativos obligatorios
             row_data['1118'] = self._as_code(contract.lre_young_worker_subsidy)

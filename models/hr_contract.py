@@ -2,6 +2,7 @@ from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
 from .lre_dt_tables import (
+    TERMINATION_CAUSE_CODES,
     WORKDAY_TYPE_CODES,
 )
 
@@ -33,8 +34,12 @@ class HrContract(models.Model):
         ('cruzblanca', 'Cruz Blanca'),
         ('nuevamasvida', 'Nueva Masvida'),
         ('vidatres', 'Vida Tres'),
-        ('esencial', 'Esencial'),
-        ('fundacion', 'Fundación Banco Estado')
+        ('chuquicamata', 'Chuquicamata'),
+        ('cruzdelnorte', 'Cruz del Norte'),
+        ('fusat', 'Fusat'),
+        ('fundacion', 'Fundación Banco Estado'),
+        ('rio_blanco', 'Río Blanco'),
+        ('san_lorenzo', 'San Lorenzo'),
     ], string='Institución Isapre')
 
     lre_health_amount_type = fields.Selection([
@@ -45,17 +50,11 @@ class HrContract(models.Model):
     lre_health_amount = fields.Float(string='Monto Pactado', digits=(16, 4),
                                      help="Cotización pactada en Isapre (en UF o Pesos)")
 
-    lre_termination_cause = fields.Selection([
-        ('1', '1 - Art. 159 N° 1 (Mutuo Acuerdo)'),
-        ('2', '2 - Art. 159 N° 2 (Renuncia del trabajador)'),
-        ('3', '3 - Art. 159 N° 4 y 5 (Vencimiento del plazo / Conclusión del trabajo)'),
-        ('4', '4 - Art. 160 (Despido disciplinario / Sin derecho a indemnización)'),
-        ('5', '5 - Art. 161 (Necesidades de la empresa / Desahucio)'),
-        ('6', '6 - Art. 163 bis (Quiebra)'),
-        ('7', '7 - Art. 159 N° 3 (Muerte del trabajador)'),
-        ('8', '8 - Art. 159 N° 6 (Caso fortuito o fuerza mayor)'),
-        ('9', '9 - Invalidez total o parcial'),
-    ], string="Causal de Término (LRE)", help="Seleccionar solo si el contrato se cancela anticipadamente. Si vence por plazo, el sistema asignará causal 3 automáticamente.")
+    lre_termination_cause = fields.Selection(
+        TERMINATION_CAUSE_CODES,
+        string="Causal de Término (LRE)",
+        help="Código oficial DT (cód 1104). Solo aplica si el contrato termina "
+             "dentro del período declarado.")
 
     # ------------------------------------------------------------------
     # Campos obligatorios LRE que hasta ahora se exportaban vacíos
