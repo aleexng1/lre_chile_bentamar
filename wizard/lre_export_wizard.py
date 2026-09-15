@@ -1,11 +1,23 @@
 # -*- coding: utf-8 -*-
+import base64
+import calendar
+import csv
+import io
+import logging
+from datetime import date
+
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
-import base64
-import io
-import csv
-from datetime import date
-import calendar
+
+from ..models.lre_dt_tables import (
+    AFP_CODES,
+    COMUNA_CODES,
+    HEALTH_CODES,
+    REGION_CODES,
+    normalize_name,
+)
+
+_logger = logging.getLogger(__name__)
 
 class LreExportWizard(models.TransientModel):
     _name = 'lre.export.wizard'
@@ -46,37 +58,199 @@ class LreExportWizard(models.TransientModel):
         ('5501', 'Total líquido(5501)'), ('5502', 'Total indemnizaciones(5502)'), ('5564', 'Total indemnizaciones tributables(5564)'), ('5565', 'Total indemnizaciones no tributables(5565)')
     ]
 
-    # Mapeos
-    AFP_CODES = {
-        'capital': '33', 'cuprum': '03', 'habitat': '05', 
-        'planvital': '29', 'provida': '23', 'modelo': '34', 
-        'uno': '35', 'ips': '08'
-    }
+    # ------------------------------------------------------------------
+    # Política de relleno por columna
+    #
+    # La DT no acepta "vacío" como sinónimo de "no aplica" en los campos
+    # obligatorios: espera el entero 0. Pero tampoco acepta un 0 en los
+    # campos que deben quedar en blanco cuando no aplican (fecha de término,
+    # tasa Art. 164, puesto de trabajo pesado, RUT sindicales). Por eso la
+    # decisión de relleno se toma por columna y no por prefijo.
+    # ------------------------------------------------------------------
 
-    ISAPRE_CODES = {
-        'banmedica': '01', 'colmena': '04', 'consalud': '09', 
-        'cruzblanca': '06', 'nuevamasvida': '43', 'vidatres': '12', 
-        'esencial': '44', 'fundacion': '40', 'rio_blanco': '41', 
-        'chuquicamata': '37'
-    }
+    # Campos obligatorios 11xx que se declaran con un código numérico (0 = "no")
+    LRE_MANDATORY_FLAG_COLUMNS = frozenset({
+        '1107', '1108', '1109', '1110', '1118', '1131',
+        '1142', '1146', '1151', '1155', '1157',
+    })
 
-    REGION_CODES = {
-        'Metropolitana': '13',
-        # Se puede extender
-    }
+    # Campos 11xx que son conteos de días o personas: 0 es un valor válido
+    LRE_MANDATORY_COUNT_COLUMNS = frozenset({
+        '1111', '1112', '1113', '1115', '1116', '1117',
+    })
+
+    # Campos que DEBEN quedar en blanco cuando no aplican
+    LRE_BLANK_WHEN_EMPTY_COLUMNS = frozenset({
+        '1103', '1104', '1114', '1132', '1154',
+        '1171', '1172', '1173', '1174', '1175',
+        '1176', '1177', '1178', '1179', '1180',
+    })
+
+    # Comunas cuyo código legado INE no permite derivar la región actual
+    # (Los Ríos, Ñuble y Arica y Parinacota se crearon después de esa tabla).
+    LRE_REGION_OVERRIDES = (
+        ('105', '14'),   # provincia de Valdivia -> Los Ríos
+        ('84', '16'),    # antigua provincia de Ñuble -> Ñuble
+        ('12', '15'),    # Camarones -> Arica y Parinacota
+        ('13', '15'),    # Putre / General Lagos -> Arica y Parinacota
+        ('151', '15'),   # Arica
+    )
 
     def _clean_rut(self, rut):
         if not rut:
             return ''
         return rut.replace('.', '').replace('-', '').strip().upper()
 
-    def _get_region_code(self, region_name):
-        if not region_name:
-            return '13'
-        for key, val in self.REGION_CODES.items():
-            if key.lower() in region_name.lower():
-                return val
-        return '13'
+    # ------------------------------------------------------------------
+    # Helpers de normalización
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _as_code(value, default: str = '0') -> str:
+        """Normaliza un booleano / entero / selection a su código LRE.
+
+        Nunca devuelve cadena vacía: la DT rechaza el campo en blanco en
+        todos los códigos declarativos obligatorios (1108, 1109, 1110,
+        1118, 1131, 1142, 1151, 1155, 1157).
+        """
+        match value:
+            case None | False | '':
+                return default
+            case True:
+                return '1'
+            case int() | float():
+                return str(int(value))
+            case str() as text if text.strip().lstrip('-').isdigit():
+                return str(int(text.strip()))
+            case _:
+                return default
+
+    def _get_region_code(self, partner_address, comuna_code: str | None) -> str | None:
+        """Resuelve el cód 1105 desde el estado del partner o, en su defecto,
+        desde el prefijo del código de comuna ya resuelto."""
+        state = partner_address.state_id if partner_address else False
+        if state:
+            if code := REGION_CODES.get(normalize_name(state.name)):
+                return code
+
+        if not comuna_code:
+            return None
+
+        for prefix, region in self.LRE_REGION_OVERRIDES:
+            if comuna_code.startswith(prefix) and len(comuna_code) == len(prefix) + 2:
+                return region
+
+        # '10102' -> '10'; '5101' -> '5'
+        return comuna_code[:-3] or None
+
+    def _get_comuna_code(self, contract, partner_address) -> str | None:
+        """Resuelve el cód 1106 (código numérico oficial, no el nombre).
+
+        Odoo no trae los códigos de comuna del SII/DT en su localización:
+        ``res.country.state`` solo modela regiones y ``res.city`` no tiene
+        campo de código oficial. Por eso la tabla vive en el módulo y el
+        contrato ofrece un campo de sobrescritura para direcciones que
+        registran una localidad en lugar de la comuna.
+        """
+        if override := (contract.lre_comuna_code or '').strip():
+            return override
+
+        if not partner_address:
+            return None
+
+        candidates = []
+        if city_id := getattr(partner_address, 'city_id', False):
+            candidates.append(city_id.name)
+        if city := getattr(partner_address, 'city', False):
+            candidates.append(city)
+
+        for candidate in candidates:
+            if code := COMUNA_CODES.get(normalize_name(candidate)):
+                return code
+        return None
+
+    def _get_workday_code(self, contract) -> str:
+        """Resuelve el cód 1107 desde el contrato.
+
+        Si el contrato no tiene jornada declarada se infiere desde el
+        calendario de trabajo (menos de 30 horas semanales = jornada parcial
+        del Art. 40 bis). Cualquier fallo al leer el calendario degrada a
+        jornada ordinaria en vez de dejar el campo nulo, que es lo que hoy
+        rechaza la DT.
+        """
+        if code := contract.lre_workday_type:
+            return code
+
+        try:
+            calendar_id = contract.resource_calendar_id
+            hours = float(getattr(calendar_id, 'hours_per_week', 0.0) or 0.0)
+        except (AttributeError, TypeError, ValueError) as exc:
+            _logger.warning(
+                "LRE 1107: no fue posible leer la jornada del contrato %s (%s); "
+                "se exporta 101 - Ordinaria. Detalle: %s",
+                contract.display_name, contract.id, exc,
+            )
+            return '101'
+
+        match hours:
+            case 0.0:
+                return '101'
+            case h if h < 30.0:
+                return '201'
+            case _:
+                return '101'
+
+    def _get_afc_code(self, contract, row_data) -> str:
+        """Resuelve el cód 1151: 1 = afiliado a la AFC, 0 = no afiliado.
+
+        Antes se emitía el literal '53' (un código de columna Previred, no un
+        valor válido para la DT, que solo acepta 0 o 1).
+        """
+        match contract.lre_afc_affiliated:
+            case '1' | '0' as explicit:
+                return explicit
+            case _:
+                contributed = (row_data.get('3151') or 0) > 0 or (row_data.get('4151') or 0) > 0
+                return '1' if contributed else '0'
+
+    def _get_health_code(self, contract) -> str:
+        """Resuelve el cód 1143 (FONASA = 102, isapres con su código DT).
+
+        La columna es obligatoria, así que nunca se devuelve vacío: un contrato
+        marcado como isapre pero sin institución informada degrada a FONASA y
+        deja traza en el log, en vez de generar un archivo que la DT rechaza.
+        """
+        match contract.lre_health_system_code:
+            case 'isapre':
+                if code := HEALTH_CODES.get(contract.lre_isapre_institution):
+                    return code
+                _logger.warning(
+                    "LRE 1143: el contrato %s (%s) declara isapre pero no tiene "
+                    "institución informada; se exporta 102 - FONASA.",
+                    contract.display_name, contract.id,
+                )
+                return HEALTH_CODES['fonasa']
+            case _:
+                # fonasa, capredena/dipreca o sin sistema declarado
+                return HEALTH_CODES['fonasa']
+
+    def _format_cell(self, col_code: str, value) -> str:
+        """Aplica la política de relleno de la DT a una celda.
+
+        Un campo obligatorio vacío es un error de formato; un campo opcional
+        relleno con 0 también. La decisión se toma por columna.
+        """
+        if value not in ('', None, False):
+            return value
+
+        if col_code in self.LRE_BLANK_WHEN_EMPTY_COLUMNS:
+            return ''
+        if col_code in self.LRE_MANDATORY_FLAG_COLUMNS:
+            return '0'
+        if col_code in self.LRE_MANDATORY_COUNT_COLUMNS:
+            return '0'
+        if col_code.startswith(('2', '3', '4', '5')):
+            return '0'
+        return ''
 
     def action_generate_lre(self):
         # 1. Buscar liquidaciones
@@ -95,6 +269,7 @@ class LreExportWizard(models.TransientModel):
             raise UserError(_('No se encontraron liquidaciones confirmadas para el periodo seleccionado.'))
 
         output_rows = []
+        validation_errors = []
 
         for slip in payslips:
             contract = slip.contract_id
@@ -139,13 +314,17 @@ class LreExportWizard(models.TransientModel):
                 if date_start <= contract.date_end <= date_end:
                     term_date = contract.date_end.strftime('%d/%m/%Y')
                     
-                    # Lógica de Causal
-                    if contract.state == 'close': # Vencido
-                        term_cause = '3' # Vencimiento del plazo
-                    elif contract.state == 'cancel': # Cancelado
+                    # Lógica de Causal (cód 1104, tabla oficial DT)
+                    if contract.state == 'close':
+                        # Vencido: la causal por defecto es el vencimiento del
+                        # plazo convenido (6 en la tabla DT, no 3, que es el
+                        # mutuo acuerdo), pero si el usuario declaró otra en el
+                        # contrato ésa manda.
+                        term_cause = contract.lre_termination_cause or '6'
+                    elif contract.state == 'cancel':
                         term_cause = contract.lre_termination_cause or ''
                     else:
-                        term_cause = '' # Otro estado (open, draft) no debería tener fecha fin en periodo activo, pero por si acaso.
+                        term_cause = ''  # open/draft: no debería tener fecha fin en el período.
             
             row_data['1103'] = term_date
             row_data['1104'] = term_cause
@@ -160,11 +339,11 @@ class LreExportWizard(models.TransientModel):
 
             # --- BLOQUE BLINDADO PARA DIRECCIÓN ---
             partner_address = False
-            
+
             # 1. Intento: Dirección Privada Estándar (si existe el campo)
             if hasattr(employee, 'address_home_id') and employee.address_home_id:
                 partner_address = employee.address_home_id
-            
+
             # 2. Intento: Private Partner ID (Odoo 18 Community/Enterprise variaciones)
             if not partner_address and hasattr(employee, 'private_partner_id') and employee.private_partner_id:
                 partner_address = employee.private_partner_id
@@ -172,61 +351,83 @@ class LreExportWizard(models.TransientModel):
             # 3. Intento: Dirección del Usuario Relacionado
             if not partner_address and employee.user_id and employee.user_id.partner_id:
                 partner_address = employee.user_id.partner_id
-                
+
             # 4. Intento: Dirección Laboral (Fallback)
             if not partner_address and hasattr(employee, 'address_id') and employee.address_id:
                 partner_address = employee.address_id
 
-            # --- 1105: REGIÓN ---
-            region_code = '13' # Default: Metropolitana
-            if partner_address and partner_address.state_id:
-                region_name = partner_address.state_id.name
-                region_code = self._get_region_code(region_name)
-            
-            row_data['1105'] = region_code
+            # --- 1106: COMUNA (código numérico oficial, no el nombre) ---
+            comuna_code = self._get_comuna_code(contract, partner_address)
+            if not comuna_code:
+                validation_errors.append(_(
+                    "%(employee)s: no fue posible determinar el código de comuna "
+                    "(cód 1106). Corrija la comuna en la dirección del trabajador "
+                    "o informe el código oficial en el campo 'Código comuna DT' "
+                    "del contrato."
+                ) % {'employee': employee.display_name})
+            row_data['1106'] = comuna_code or ''
 
-            # --- 1106: COMUNA ---
-            comuna_name = ''
-            if partner_address:
-                if hasattr(partner_address, 'city') and partner_address.city:
-                     comuna_name = partner_address.city
-                elif hasattr(partner_address, 'city_id') and partner_address.city_id:
-                     comuna_name = partner_address.city_id.name
-            
-            row_data['1106'] = comuna_name
+            # --- 1105: REGIÓN ---
+            region_code = self._get_region_code(partner_address, comuna_code)
+            if not region_code:
+                validation_errors.append(_(
+                    "%(employee)s: no fue posible determinar el código de región "
+                    "(cód 1105)."
+                ) % {'employee': employee.display_name})
+            row_data['1105'] = region_code or ''
+
+            # --- 1107: TIPO DE JORNADA ---
+            row_data['1107'] = self._get_workday_code(contract)
+
+            # --- 1108 / 1109: discapacidad y pensión de vejez ---
+            row_data['1108'] = self._as_code(contract.lre_disability_status)
+            row_data['1109'] = self._as_code(contract.lre_old_age_pensioner)
 
             # 1170 Tipo Impuesto
-            row_data['1170'] = '1' # Impuesto Único
+            row_data['1170'] = '1'  # Impuesto Único
 
             # 1146 Tecnico Extranjero
             row_data['1146'] = '0'
 
-            # 1141 AFP
-            afp_code_internal = contract.lre_afp_code
-            row_data['1141'] = self.AFP_CODES.get(afp_code_internal, '00')
+            # 1141 AFP (códigos DT, no Previred)
+            row_data['1141'] = AFP_CODES.get(contract.lre_afp_code, AFP_CODES['sin_afp'])
+
+            # 1142 IPS (ExINP): 0 = no pertenece al antiguo régimen
+            row_data['1142'] = self._as_code(contract.lre_ips_code)
 
             # 1143 Salud
-            health_system = contract.lre_health_system_code
-            if health_system == 'fonasa':
-                row_data['1143'] = '07'
-            elif health_system == 'isapre':
-                isapre_internal = contract.lre_isapre_institution
-                row_data['1143'] = self.ISAPRE_CODES.get(isapre_internal, '')
-            else:
-                row_data['1143'] = '00'
+            row_data['1143'] = self._get_health_code(contract)
 
-            # 1151 AFC
-            # Si hay cotización AFC (trabajador o empleador), poner código 53.
-            if row_data.get('3151', 0) > 0 or row_data.get('4151', 0) > 0:
-                row_data['1151'] = '53'
-            else:
-                row_data['1151'] = '0'
+            # 1151 AFC: 0 / 1, nunca el literal '53'
+            row_data['1151'] = self._get_afc_code(contract, row_data)
 
-            # 1152 Mutual
-            # Usar configuración de compañía
-            row_data['1152'] = contract.company_id.lre_mutual_code or '102'
+            # 1110 CCAF: atributo de la empresa, no del trabajador
+            row_data['1110'] = self._as_code(contract.company_id.lre_ccaf_code)
+
+            # 1152 Mutual (códigos DT 0/1/2/3)
+            row_data['1152'] = self._as_code(contract.company_id.lre_mutual_code)
+
+            # 1118 / 1155 / 1157 / 1131: declarativos obligatorios
+            row_data['1118'] = self._as_code(contract.lre_young_worker_subsidy)
+            row_data['1155'] = self._as_code(contract.lre_apvi)
+            row_data['1157'] = self._as_code(contract.lre_apvc)
+            row_data['1131'] = self._as_code(contract.lre_severance_all_events)
+
+            # 1132: la tasa solo se informa si existe pacto del Art. 164
+            row_data['1132'] = (
+                f"{contract.lre_severance_rate:.2f}"
+                if contract.lre_severance_all_events and contract.lre_severance_rate
+                else ''
+            )
 
             output_rows.append(row_data)
+
+        # Fallar antes de generar un archivo que la DT va a rechazar
+        if validation_errors:
+            raise UserError(
+                _("No es posible generar el LRE: faltan datos obligatorios.\n\n%s")
+                % "\n".join(f"- {error}" for error in validation_errors)
+            )
 
         # Definir columnas finales
         final_columns = self.LRE_COLUMNS # Por defecto usamos las 147
@@ -251,24 +452,18 @@ class LreExportWizard(models.TransientModel):
             final_columns = columns_with_data
 
         # Generar CSV
-        output = io.StringIO()
-        writer = csv.writer(output, delimiter=';')
-        
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter=';', lineterminator='\r\n')
+
         # Escribir cabeceras
         headers = [col[1] for col in final_columns]
         writer.writerow(headers)
 
         for row_data in output_rows:
-            # Escribir fila
-            row = []
-            for col_code, col_name in final_columns:
-                val = row_data.get(col_code, '')
-                if val == '':
-                    # Si es columna de monto (2xxx, 3xxx, 4xxx, 5xxx), poner 0
-                    if col_code.startswith(('2', '3', '4', '5')):
-                        val = 0
-                row.append(val)
-            writer.writerow(row)
+            writer.writerow([
+                self._format_cell(col_code, row_data.get(col_code, ''))
+                for col_code, _col_name in final_columns
+            ])
 
         # Codificar
         out_data = base64.b64encode(output.getvalue().encode('latin-1', errors='replace'))
