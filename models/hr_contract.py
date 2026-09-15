@@ -35,9 +35,9 @@ class HrContract(models.Model):
         ('clp', 'Pesos'),
         ('uf', 'UF')
     ], string='Moneda Plan', default='clp')
-    
-    lre_health_amount = fields.Float(string='Monto Pactado', digits=(16, 4), 
-                                   help="Cotización pactada en Isapre (en UF o Pesos)")
+
+    lre_health_amount = fields.Float(string='Monto Pactado', digits=(16, 4),
+                                     help="Cotización pactada en Isapre (en UF o Pesos)")
 
     lre_termination_cause = fields.Selection([
         ('1', '1 - Art. 159 N° 1 (Mutuo Acuerdo)'),
@@ -50,3 +50,14 @@ class HrContract(models.Model):
         ('8', '8 - Art. 159 N° 6 (Caso fortuito o fuerza mayor)'),
         ('9', '9 - Invalidez total o parcial'),
     ], string="Causal de Término (LRE)", help="Seleccionar solo si el contrato se cancela anticipadamente. Si vence por plazo, el sistema asignará causal 3 automáticamente.")
+
+    # ------------------------------------------------------------------
+    # Campos obligatorios LRE que hasta ahora se exportaban vacíos
+    # ------------------------------------------------------------------
+    lre_comuna_code = fields.Char(
+        string="Código comuna DT (1106)",
+        size=5,
+        help="Código oficial de la comuna donde se prestan los servicios. "
+             "Completar solo si la comuna no puede resolverse automáticamente "
+             "desde la ficha de dirección (p. ej. cuando la dirección registra "
+             "una localidad como 'Pargua' en lugar de la comuna 'Calbuco').")

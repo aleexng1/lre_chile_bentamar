@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
+import base64
+import calendar
+import csv
+import io
+from datetime import date
+
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
-import base64
-import io
-import csv
-from datetime import date
-import calendar
+
+from ..models.lre_dt_tables import (
+    COMUNA_CODES,
+    REGION_CODES,
+    normalize_name,
+)
 
 class LreExportWizard(models.TransientModel):
     _name = 'lre.export.wizard'
@@ -46,6 +53,16 @@ class LreExportWizard(models.TransientModel):
         ('5501', 'Total líquido(5501)'), ('5502', 'Total indemnizaciones(5502)'), ('5564', 'Total indemnizaciones tributables(5564)'), ('5565', 'Total indemnizaciones no tributables(5565)')
     ]
 
+    # Comunas cuyo código legado INE no permite derivar la región actual
+    # (Los Ríos, Ñuble y Arica y Parinacota se crearon después de esa tabla).
+    LRE_REGION_OVERRIDES = (
+        ('105', '14'),   # provincia de Valdivia -> Los Ríos
+        ('84', '16'),    # antigua provincia de Ñuble -> Ñuble
+        ('12', '15'),    # Camarones -> Arica y Parinacota
+        ('13', '15'),    # Putre / General Lagos -> Arica y Parinacota
+        ('151', '15'),   # Arica
+    )
+
     # Mapeos
     AFP_CODES = {
         'capital': '33', 'cuprum': '03', 'habitat': '05', 
@@ -60,23 +77,57 @@ class LreExportWizard(models.TransientModel):
         'chuquicamata': '37'
     }
 
-    REGION_CODES = {
-        'Metropolitana': '13',
-        # Se puede extender
-    }
-
     def _clean_rut(self, rut):
         if not rut:
             return ''
         return rut.replace('.', '').replace('-', '').strip().upper()
 
-    def _get_region_code(self, region_name):
-        if not region_name:
-            return '13'
-        for key, val in self.REGION_CODES.items():
-            if key.lower() in region_name.lower():
-                return val
-        return '13'
+    # ------------------------------------------------------------------
+    # Helpers de normalización
+    # ------------------------------------------------------------------
+    def _get_region_code(self, partner_address, comuna_code: str | None) -> str | None:
+        """Resuelve el cód 1105 desde el estado del partner o, en su defecto,
+        desde el prefijo del código de comuna ya resuelto."""
+        state = partner_address.state_id if partner_address else False
+        if state:
+            if code := REGION_CODES.get(normalize_name(state.name)):
+                return code
+
+        if not comuna_code:
+            return None
+
+        for prefix, region in self.LRE_REGION_OVERRIDES:
+            if comuna_code.startswith(prefix) and len(comuna_code) == len(prefix) + 2:
+                return region
+
+        # '10102' -> '10'; '5101' -> '5'
+        return comuna_code[:-3] or None
+
+    def _get_comuna_code(self, contract, partner_address) -> str | None:
+        """Resuelve el cód 1106 (código numérico oficial, no el nombre).
+
+        Odoo no trae los códigos de comuna del SII/DT en su localización:
+        ``res.country.state`` solo modela regiones y ``res.city`` no tiene
+        campo de código oficial. Por eso la tabla vive en el módulo y el
+        contrato ofrece un campo de sobrescritura para direcciones que
+        registran una localidad en lugar de la comuna.
+        """
+        if override := (contract.lre_comuna_code or '').strip():
+            return override
+
+        if not partner_address:
+            return None
+
+        candidates = []
+        if city_id := getattr(partner_address, 'city_id', False):
+            candidates.append(city_id.name)
+        if city := getattr(partner_address, 'city', False):
+            candidates.append(city)
+
+        for candidate in candidates:
+            if code := COMUNA_CODES.get(normalize_name(candidate)):
+                return code
+        return None
 
     def action_generate_lre(self):
         # 1. Buscar liquidaciones
@@ -95,6 +146,7 @@ class LreExportWizard(models.TransientModel):
             raise UserError(_('No se encontraron liquidaciones confirmadas para el periodo seleccionado.'))
 
         output_rows = []
+        validation_errors = []
 
         for slip in payslips:
             contract = slip.contract_id
@@ -160,11 +212,11 @@ class LreExportWizard(models.TransientModel):
 
             # --- BLOQUE BLINDADO PARA DIRECCIÓN ---
             partner_address = False
-            
+
             # 1. Intento: Dirección Privada Estándar (si existe el campo)
             if hasattr(employee, 'address_home_id') and employee.address_home_id:
                 partner_address = employee.address_home_id
-            
+
             # 2. Intento: Private Partner ID (Odoo 18 Community/Enterprise variaciones)
             if not partner_address and hasattr(employee, 'private_partner_id') and employee.private_partner_id:
                 partner_address = employee.private_partner_id
@@ -172,28 +224,30 @@ class LreExportWizard(models.TransientModel):
             # 3. Intento: Dirección del Usuario Relacionado
             if not partner_address and employee.user_id and employee.user_id.partner_id:
                 partner_address = employee.user_id.partner_id
-                
+
             # 4. Intento: Dirección Laboral (Fallback)
             if not partner_address and hasattr(employee, 'address_id') and employee.address_id:
                 partner_address = employee.address_id
 
-            # --- 1105: REGIÓN ---
-            region_code = '13' # Default: Metropolitana
-            if partner_address and partner_address.state_id:
-                region_name = partner_address.state_id.name
-                region_code = self._get_region_code(region_name)
-            
-            row_data['1105'] = region_code
+            # --- 1106: COMUNA (código numérico oficial, no el nombre) ---
+            comuna_code = self._get_comuna_code(contract, partner_address)
+            if not comuna_code:
+                validation_errors.append(_(
+                    "%(employee)s: no fue posible determinar el código de comuna "
+                    "(cód 1106). Corrija la comuna en la dirección del trabajador "
+                    "o informe el código oficial en el campo 'Código comuna DT' "
+                    "del contrato."
+                ) % {'employee': employee.display_name})
+            row_data['1106'] = comuna_code or ''
 
-            # --- 1106: COMUNA ---
-            comuna_name = ''
-            if partner_address:
-                if hasattr(partner_address, 'city') and partner_address.city:
-                     comuna_name = partner_address.city
-                elif hasattr(partner_address, 'city_id') and partner_address.city_id:
-                     comuna_name = partner_address.city_id.name
-            
-            row_data['1106'] = comuna_name
+            # --- 1105: REGIÓN ---
+            region_code = self._get_region_code(partner_address, comuna_code)
+            if not region_code:
+                validation_errors.append(_(
+                    "%(employee)s: no fue posible determinar el código de región "
+                    "(cód 1105)."
+                ) % {'employee': employee.display_name})
+            row_data['1105'] = region_code or ''
 
             # 1170 Tipo Impuesto
             row_data['1170'] = '1' # Impuesto Único
@@ -227,6 +281,13 @@ class LreExportWizard(models.TransientModel):
             row_data['1152'] = contract.company_id.lre_mutual_code or '102'
 
             output_rows.append(row_data)
+
+        # Fallar antes de generar un archivo que la DT va a rechazar
+        if validation_errors:
+            raise UserError(
+                _("No es posible generar el LRE: faltan datos obligatorios.\n\n%s")
+                % "\n".join(f"- {error}" for error in validation_errors)
+            )
 
         # Definir columnas finales
         final_columns = self.LRE_COLUMNS # Por defecto usamos las 147
