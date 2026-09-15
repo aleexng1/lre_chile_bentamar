@@ -12,6 +12,9 @@
                                 <field name="lre_mutual_rate"/>
                                 <field name="lre_mutual_code"/>
                             </group>
+                            <group string="Caja de Compensación">
+                                <field name="lre_ccaf_code"/>
+                            </group>
                         </group>
                     </page>
                 </xpath>

@@ -6,7 +6,12 @@
             <field name="inherit_id" ref="hr_contract.hr_contract_view_form"/>
             <field name="arch" type="xml">
                 <xpath expr="//field[@name='date_end']" position="after">
-                    <field name="lre_termination_cause" invisible="state != 'cancel'" required="state == 'cancel'"/>
+                    <!-- La causal (cód 1104) también aplica a los contratos que
+                         terminan por vencimiento del plazo (estado 'close'), no
+                         solo a los cancelados anticipadamente. -->
+                    <field name="lre_termination_cause"
+                           invisible="not date_end"
+                           required="state in ('cancel', 'close')"/>
                 </xpath>
                 <xpath expr="//notebook" position="inside">
                     <page string="Información Previsional (Chile)" name="lre_chile_prevision">
@@ -19,6 +24,25 @@
                                 <field name="lre_isapre_institution" invisible="lre_health_system_code != 'isapre'"/>
                                 <field name="lre_health_amount_type" invisible="lre_health_system_code != 'isapre'"/>
                                 <field name="lre_health_amount" invisible="lre_health_system_code != 'isapre'"/>
+                            </group>
+                            <group string="Jornada y lugar de trabajo">
+                                <field name="lre_workday_type"/>
+                                <field name="lre_comuna_code"/>
+                            </group>
+                            <group string="Situación previsional">
+                                <field name="lre_old_age_pensioner"/>
+                                <field name="lre_disability_status"/>
+                                <field name="lre_ips_code"/>
+                                <field name="lre_young_worker_subsidy"/>
+                                <field name="lre_afc_affiliated"/>
+                            </group>
+                            <group string="Ahorro previsional voluntario">
+                                <field name="lre_apvi"/>
+                                <field name="lre_apvc"/>
+                            </group>
+                            <group string="Indemnización Art. 164">
+                                <field name="lre_severance_all_events"/>
+                                <field name="lre_severance_rate" invisible="not lre_severance_all_events"/>
                             </group>
                         </group>
                     </page>
