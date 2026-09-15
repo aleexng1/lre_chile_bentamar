@@ -4,6 +4,8 @@ from odoo.exceptions import UserError
 import base64
 import io
 import csv
+import re
+import unicodedata
 from datetime import date
 import calendar
 
@@ -55,12 +57,17 @@ class PreviredExportWizard(models.TransientModel):
     }
 
     def _clean_rut(self, rut):
+        """Limpia RUT y retorna (cuerpo, dv). Ej: ('12345678', 'K')"""
         if not rut:
             return '', ''
-        rut_clean = rut.replace('.', '').replace(',', '').replace('-', '').strip().upper()
-        if len(rut_clean) > 1:
-            return rut_clean[:-1], rut_clean[-1]
-        return rut_clean, ''
+        rut_clean = re.sub(r'[^0-9kK]', '', str(rut)).upper()
+        if len(rut_clean) < 2:
+            return rut_clean, ''
+        cuerpo = rut_clean[:-1]
+        dv = rut_clean[-1]
+        if not cuerpo.isdigit():
+            return '', ''
+        return cuerpo, dv
 
     def _split_name(self, name):
         if not name:
@@ -73,39 +80,38 @@ class PreviredExportWizard(models.TransientModel):
         elif len(parts) == 3:
             return parts[0], parts[1], parts[2]
         else:
-            # Asumir: Apellido1 Apellido2 Nombre1 Nombre2...
-            # Previred pide: Apellido Paterno, Apellido Materno, Nombres
-            # Odoo name suele ser: Nombre Completo.
-            # Intento heurístico simple: Ultimos dos son apellidos? No siempre.
-            # Mejor usar la lógica inversa si el nombre está como "Nombres Apellidos"
-            # Si está como "Apellidos Nombres", es otra cosa.
-            # Asumiremos formato Odoo estándar "First Last" -> Last, "", First
-            # O si tiene 3: "First Middle Last" -> Last, Middle, First ?? No.
-            # Usaremos la lógica simple: 
-            # Apellido Paterno = Penúltima palabra
-            # Apellido Materno = Última palabra
-            # Nombres = Todo lo anterior
-            # ESTO ES ARRIESGADO. Mejor usar campos separados si existen, o fallback.
-            # El usuario pidió usar "tu helper _split_name". Asumiré una lógica estándar.
-            # Helper simple:
-            # Asumimos formato "Nombres Apellidos"
-            # Apellido P = parts[-2]
-            # Apellido M = parts[-1]
-            # Nombres = " ".join(parts[:-2])
             return parts[-2], parts[-1], " ".join(parts[:-2])
 
-    def _sanitize_text(self, text):
+    def _sanitize_text(self, text, max_length=0):
+        """Sanitiza texto para archivos planos Previred (sistemas legacy COBOL).
+
+        - Convierte a mayúsculas
+        - Reemplaza Ñ→N, elimina tildes
+        - Filtra caracteres no-ASCII y delimitadores peligrosos (;|\n\r\t)
+        - Trunca al largo máximo si se especifica
+
+        :param text: Texto de entrada
+        :param max_length: Largo máximo permitido (0 = sin límite)
+        :return: Texto limpio y seguro
+        """
         if not text:
             return ''
-        # 1. Convertir a String y Mayúsculas
         text = str(text).upper()
-        # 2. Reemplazos manuales críticos (Ñ -> N)
+        # Reemplazos criticos antes de normalización
         text = text.replace('Ñ', 'N').replace('ñ', 'N')
-        # 3. Normalización Unicode para separar tildes (Á -> A + ´)
-        import unicodedata
+        # Normalización Unicode (separar tildes)
         text = unicodedata.normalize('NFD', text)
-        # 4. Filtrar solo caracteres ASCII (elimina los tildes separados)
-        text = text.encode('ascii', 'ignore').decode('utf-8')
+        # Eliminar marcas diacríticas (tildes separadas)
+        text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+        # Eliminar delimitadores y caracteres de control peligrosos
+        text = re.sub(r'[;|\r\n\t\\]', '', text)
+        # Filtrar solo ASCII imprimible (32-126)
+        text = text.encode('ascii', 'ignore').decode('ascii')
+        # Eliminar espacios múltiples
+        text = re.sub(r'\s+', ' ', text).strip()
+        # Truncar si hay límite
+        if max_length > 0:
+            text = text[:max_length]
         return text
 
     def action_generate_previred(self):
@@ -151,20 +157,17 @@ class PreviredExportWizard(models.TransientModel):
             # Intentamos ser inteligentes:
             parts = employee.name.strip().split()
             if len(parts) >= 2:
-                # Asumimos Nombres Apellido1 (Apellido2 opcional)
-                # Pero en Chile es muy común Nombres ApellidoP ApellidoM
-                # Si son 2: Nombre Apellido
                 if len(parts) == 2:
-                    row[2] = self._sanitize_text(parts[1]) # Ap Pat
+                    row[2] = self._sanitize_text(parts[1], max_length=30)  # Ap Pat
                     row[3] = ''       # Ap Mat
-                    row[4] = self._sanitize_text(parts[0]) # Nombres
+                    row[4] = self._sanitize_text(parts[0], max_length=30)  # Nombres
                 else:
                     # 3 o más: Nombres ApP ApM
-                    row[2] = self._sanitize_text(parts[-2]) # Ap Pat
-                    row[3] = self._sanitize_text(parts[-1]) # Ap Mat
-                    row[4] = self._sanitize_text(" ".join(parts[:-2])) # Nombres
+                    row[2] = self._sanitize_text(parts[-2], max_length=30)  # Ap Pat
+                    row[3] = self._sanitize_text(parts[-1], max_length=30)  # Ap Mat
+                    row[4] = self._sanitize_text(" ".join(parts[:-2]), max_length=30)  # Nombres
             else:
-                row[2] = self._sanitize_text(employee.name) # Ap Pat (Todo)
+                row[2] = self._sanitize_text(employee.name, max_length=30)  # Ap Pat (Todo)
                 row[3] = ''
                 row[4] = ''
 
