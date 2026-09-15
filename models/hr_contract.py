@@ -1,4 +1,5 @@
-from odoo import models, fields
+from odoo import models, fields, api
+from odoo.exceptions import ValidationError
 
 from .lre_dt_tables import (
     WORKDAY_TYPE_CODES,
@@ -74,6 +75,43 @@ class HrContract(models.Model):
         help="Código oficial DT del tipo de jornada pactada en el contrato o "
              "en un anexo posterior.")
 
+    lre_disability_status = fields.Selection([
+        ('0', '0 - No'),
+        ('1', '1 - Discapacidad certificada por la COMPIN'),
+        ('2', '2 - Asignatario pensión por invalidez total'),
+        ('3', '3 - Pensionado con invalidez parcial'),
+    ], string="Discapacidad / Invalidez (1108)", default='0')
+
+    lre_old_age_pensioner = fields.Boolean(
+        string="Pensionado por vejez (1109)", default=False)
+
+    lre_ips_code = fields.Char(
+        string="Régimen IPS - ExINP (1142)",
+        size=3,
+        default='0',
+        help="Código del régimen del antiguo sistema previsional. '0' si el "
+             "trabajador no pertenece al IPS.")
+
+    lre_young_worker_subsidy = fields.Boolean(
+        string="Subsidio trabajador joven (1118)", default=False)
+
+    lre_apvi = fields.Boolean(
+        string="APVI - Ahorro previsional voluntario individual (1155)",
+        default=False)
+
+    lre_apvc = fields.Boolean(
+        string="APVC - Ahorro previsional voluntario colectivo (1157)",
+        default=False)
+
+    lre_severance_all_events = fields.Boolean(
+        string="Indemnización a todo evento Art. 164 (1131)", default=False)
+
+    lre_severance_rate = fields.Float(
+        string="Tasa indemnización a todo evento (1132)",
+        digits=(5, 2),
+        help="Tasa porcentual sobre la remuneración imponible (mínimo 4,11%). "
+             "Solo se exporta si el pacto del Art. 164 está activo.")
+
     lre_afc_affiliated = fields.Selection([
         ('auto', 'Determinar según cotizaciones del período'),
         ('1', 'Sí, afiliado a la AFC'),
@@ -83,3 +121,11 @@ class HrContract(models.Model):
              "desde el 02-10-2002. En modo automático el valor se deriva de la "
              "existencia de cotización del trabajador (3151) o aporte del "
              "empleador (4151) en el período.")
+
+    @api.constrains('lre_severance_all_events', 'lre_severance_rate')
+    def _check_lre_severance_rate(self):
+        for contract in self:
+            if contract.lre_severance_all_events and contract.lre_severance_rate < 4.11:
+                raise ValidationError(
+                    "El pacto de indemnización a todo evento (Art. 164) exige "
+                    "una tasa mínima de 4,11%.")

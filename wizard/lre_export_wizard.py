@@ -56,6 +56,34 @@ class LreExportWizard(models.TransientModel):
         ('5501', 'Total líquido(5501)'), ('5502', 'Total indemnizaciones(5502)'), ('5564', 'Total indemnizaciones tributables(5564)'), ('5565', 'Total indemnizaciones no tributables(5565)')
     ]
 
+    # ------------------------------------------------------------------
+    # Política de relleno por columna
+    #
+    # La DT no acepta "vacío" como sinónimo de "no aplica" en los campos
+    # obligatorios: espera el entero 0. Pero tampoco acepta un 0 en los
+    # campos que deben quedar en blanco cuando no aplican (fecha de término,
+    # tasa Art. 164, puesto de trabajo pesado, RUT sindicales). Por eso la
+    # decisión de relleno se toma por columna y no por prefijo.
+    # ------------------------------------------------------------------
+
+    # Campos obligatorios 11xx que se declaran con un código numérico (0 = "no")
+    LRE_MANDATORY_FLAG_COLUMNS = frozenset({
+        '1107', '1108', '1109', '1110', '1118', '1131',
+        '1142', '1146', '1151', '1155', '1157',
+    })
+
+    # Campos 11xx que son conteos de días o personas: 0 es un valor válido
+    LRE_MANDATORY_COUNT_COLUMNS = frozenset({
+        '1111', '1112', '1113', '1115', '1116', '1117',
+    })
+
+    # Campos que DEBEN quedar en blanco cuando no aplican
+    LRE_BLANK_WHEN_EMPTY_COLUMNS = frozenset({
+        '1103', '1104', '1114', '1132', '1154',
+        '1171', '1172', '1173', '1174', '1175',
+        '1176', '1177', '1178', '1179', '1180',
+    })
+
     # Comunas cuyo código legado INE no permite derivar la región actual
     # (Los Ríos, Ñuble y Arica y Parinacota se crearon después de esa tabla).
     LRE_REGION_OVERRIDES = (
@@ -88,6 +116,26 @@ class LreExportWizard(models.TransientModel):
     # ------------------------------------------------------------------
     # Helpers de normalización
     # ------------------------------------------------------------------
+    @staticmethod
+    def _as_code(value, default: str = '0') -> str:
+        """Normaliza un booleano / entero / selection a su código LRE.
+
+        Nunca devuelve cadena vacía: la DT rechaza el campo en blanco en
+        todos los códigos declarativos obligatorios (1108, 1109, 1110,
+        1118, 1131, 1142, 1151, 1155, 1157).
+        """
+        match value:
+            case None | False | '':
+                return default
+            case True:
+                return '1'
+            case int() | float():
+                return str(int(value))
+            case str() as text if text.strip().lstrip('-').isdigit():
+                return str(int(text.strip()))
+            case _:
+                return default
+
     def _get_region_code(self, partner_address, comuna_code: str | None) -> str | None:
         """Resuelve el cód 1105 desde el estado del partner o, en su defecto,
         desde el prefijo del código de comuna ya resuelto."""
@@ -175,6 +223,25 @@ class LreExportWizard(models.TransientModel):
             case _:
                 contributed = (row_data.get('3151') or 0) > 0 or (row_data.get('4151') or 0) > 0
                 return '1' if contributed else '0'
+
+    def _format_cell(self, col_code: str, value) -> str:
+        """Aplica la política de relleno de la DT a una celda.
+
+        Un campo obligatorio vacío es un error de formato; un campo opcional
+        relleno con 0 también. La decisión se toma por columna.
+        """
+        if value not in ('', None, False):
+            return value
+
+        if col_code in self.LRE_BLANK_WHEN_EMPTY_COLUMNS:
+            return ''
+        if col_code in self.LRE_MANDATORY_FLAG_COLUMNS:
+            return '0'
+        if col_code in self.LRE_MANDATORY_COUNT_COLUMNS:
+            return '0'
+        if col_code.startswith(('2', '3', '4', '5')):
+            return '0'
+        return ''
 
     def action_generate_lre(self):
         # 1. Buscar liquidaciones
@@ -299,8 +366,12 @@ class LreExportWizard(models.TransientModel):
             # --- 1107: TIPO DE JORNADA ---
             row_data['1107'] = self._get_workday_code(contract)
 
+            # --- 1108 / 1109: discapacidad y pensión de vejez ---
+            row_data['1108'] = self._as_code(contract.lre_disability_status)
+            row_data['1109'] = self._as_code(contract.lre_old_age_pensioner)
+
             # 1170 Tipo Impuesto
-            row_data['1170'] = '1' # Impuesto Único
+            row_data['1170'] = '1'  # Impuesto Único
 
             # 1146 Tecnico Extranjero
             row_data['1146'] = '0'
@@ -308,6 +379,9 @@ class LreExportWizard(models.TransientModel):
             # 1141 AFP
             afp_code_internal = contract.lre_afp_code
             row_data['1141'] = self.AFP_CODES.get(afp_code_internal, '00')
+
+            # 1142 IPS (ExINP): 0 = no pertenece al antiguo régimen
+            row_data['1142'] = self._as_code(contract.lre_ips_code)
 
             # 1143 Salud
             health_system = contract.lre_health_system_code
@@ -322,9 +396,25 @@ class LreExportWizard(models.TransientModel):
             # 1151 AFC: 0 / 1, nunca el literal '53'
             row_data['1151'] = self._get_afc_code(contract, row_data)
 
+            # 1110 CCAF: atributo de la empresa, no del trabajador
+            row_data['1110'] = self._as_code(contract.company_id.lre_ccaf_code)
+
             # 1152 Mutual
             # Usar configuración de compañía
             row_data['1152'] = contract.company_id.lre_mutual_code or '102'
+
+            # 1118 / 1155 / 1157 / 1131: declarativos obligatorios
+            row_data['1118'] = self._as_code(contract.lre_young_worker_subsidy)
+            row_data['1155'] = self._as_code(contract.lre_apvi)
+            row_data['1157'] = self._as_code(contract.lre_apvc)
+            row_data['1131'] = self._as_code(contract.lre_severance_all_events)
+
+            # 1132: la tasa solo se informa si existe pacto del Art. 164
+            row_data['1132'] = (
+                f"{contract.lre_severance_rate:.2f}"
+                if contract.lre_severance_all_events and contract.lre_severance_rate
+                else ''
+            )
 
             output_rows.append(row_data)
 
@@ -358,24 +448,18 @@ class LreExportWizard(models.TransientModel):
             final_columns = columns_with_data
 
         # Generar CSV
-        output = io.StringIO()
-        writer = csv.writer(output, delimiter=';')
-        
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter=';', lineterminator='\r\n')
+
         # Escribir cabeceras
         headers = [col[1] for col in final_columns]
         writer.writerow(headers)
 
         for row_data in output_rows:
-            # Escribir fila
-            row = []
-            for col_code, col_name in final_columns:
-                val = row_data.get(col_code, '')
-                if val == '':
-                    # Si es columna de monto (2xxx, 3xxx, 4xxx, 5xxx), poner 0
-                    if col_code.startswith(('2', '3', '4', '5')):
-                        val = 0
-                row.append(val)
-            writer.writerow(row)
+            writer.writerow([
+                self._format_cell(col_code, row_data.get(col_code, ''))
+                for col_code, _col_name in final_columns
+            ])
 
         # Codificar
         out_data = base64.b64encode(output.getvalue().encode('latin-1', errors='replace'))
