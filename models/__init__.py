@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from . import lre_dt_tables
 from . import iu
 from . import indicators
 from . import hr_contract
