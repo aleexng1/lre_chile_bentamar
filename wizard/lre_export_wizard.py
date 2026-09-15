@@ -129,6 +129,19 @@ class LreExportWizard(models.TransientModel):
                 return code
         return None
 
+    def _get_afc_code(self, contract, row_data) -> str:
+        """Resuelve el cód 1151: 1 = afiliado a la AFC, 0 = no afiliado.
+
+        Antes se emitía el literal '53' (un código de columna Previred, no un
+        valor válido para la DT, que solo acepta 0 o 1).
+        """
+        match contract.lre_afc_affiliated:
+            case '1' | '0' as explicit:
+                return explicit
+            case _:
+                contributed = (row_data.get('3151') or 0) > 0 or (row_data.get('4151') or 0) > 0
+                return '1' if contributed else '0'
+
     def action_generate_lre(self):
         # 1. Buscar liquidaciones
         last_day = calendar.monthrange(self.year, int(self.month))[1]
@@ -269,12 +282,8 @@ class LreExportWizard(models.TransientModel):
             else:
                 row_data['1143'] = '00'
 
-            # 1151 AFC
-            # Si hay cotización AFC (trabajador o empleador), poner código 53.
-            if row_data.get('3151', 0) > 0 or row_data.get('4151', 0) > 0:
-                row_data['1151'] = '53'
-            else:
-                row_data['1151'] = '0'
+            # 1151 AFC: 0 / 1, nunca el literal '53'
+            row_data['1151'] = self._get_afc_code(contract, row_data)
 
             # 1152 Mutual
             # Usar configuración de compañía

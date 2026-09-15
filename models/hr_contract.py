@@ -61,3 +61,13 @@ class HrContract(models.Model):
              "Completar solo si la comuna no puede resolverse automáticamente "
              "desde la ficha de dirección (p. ej. cuando la dirección registra "
              "una localidad como 'Pargua' en lugar de la comuna 'Calbuco').")
+
+    lre_afc_affiliated = fields.Selection([
+        ('auto', 'Determinar según cotizaciones del período'),
+        ('1', 'Sí, afiliado a la AFC'),
+        ('0', 'No afiliado a la AFC'),
+    ], string="Afiliación AFC (1151)", default='auto',
+        help="La afiliación es obligatoria para todo trabajador contratado "
+             "desde el 02-10-2002. En modo automático el valor se deriva de la "
+             "existencia de cotización del trabajador (3151) o aporte del "
+             "empleador (4151) en el período.")
